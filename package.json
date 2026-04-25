@@ -63,6 +63,7 @@
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
     "three": "^0.184.0",
+    "topojson-client": "^3.1.0",
     "vaul": "^0.9.9",
     "zod": "^3.25.76"
   },
@@ -75,6 +76,7 @@
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",
     "@types/three": "^0.184.0",
+    "@types/topojson-client": "^3.1.5",
     "@vitejs/plugin-react-swc": "^3.11.0",
     "autoprefixer": "^10.4.21",
     "eslint": "^9.32.0",
