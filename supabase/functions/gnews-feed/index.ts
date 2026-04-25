@@ -96,7 +96,11 @@ Deno.serve(async (req) => {
       sample.map(async (code) => {
         const url = `https://gnews.io/api/v4/top-headlines?country=${code}&max=3&lang=en&apikey=${apiKey}`;
         const r = await fetch(url);
-        if (!r.ok) throw new Error(`gnews ${code} ${r.status}`);
+        if (!r.ok) {
+          const text = await r.text();
+          console.error(`gnews ${code} ${r.status}: ${text}`);
+          throw new Error(`gnews ${code} ${r.status}`);
+        }
         const j = await r.json();
         return { code, articles: j.articles ?? [] };
       })
