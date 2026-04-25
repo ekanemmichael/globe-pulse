@@ -1,4 +1,8 @@
-import { corsHeaders } from "@supabase/supabase-js/cors";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+};
 
 // Country code → { name, lat, lng } for geo placement of news arcs.
 const COUNTRIES: Record<string, { name: string; lat: number; lng: number }> = {
