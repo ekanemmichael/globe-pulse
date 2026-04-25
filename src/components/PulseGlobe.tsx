@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
 import Globe, { type GlobeMethods } from "react-globe.gl";
-import * as THREE from "three";
 import type { GlobalEvent } from "@/types/event";
 
 interface PulseGlobeProps {
@@ -25,6 +24,7 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
   const colors = useMemo(() => readDesignTokens(), []);
 
   // Country polygons: load Natural Earth countries GeoJSON once.
+  // These give us labeled country borders that glow on hover.
   const countriesRef = useRef<{ features: object[] } | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -33,7 +33,6 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
     )
       .then((r) => r.json())
       .then(async (topo) => {
-        // Convert TopoJSON to GeoJSON via topojson-client (loaded dynamically)
         const ts = await import("topojson-client");
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const gj = ts.feature(topo as any, (topo as any).objects.countries) as unknown as { features: object[] };
@@ -82,7 +81,7 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
     controls.addEventListener("start", onStart);
     controls.addEventListener("end", onEnd);
 
-    g.pointOfView({ lat: 25, lng: 10, altitude: 2.6 }, 0);
+    g.pointOfView({ lat: 25, lng: 10, altitude: 2.4 }, 0);
     return () => {
       controls.removeEventListener("start", onStart);
       controls.removeEventListener("end", onEnd);
@@ -140,6 +139,9 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
     [events, selectedId, colors]
   );
 
+  // Hovered country highlight state (keeps re-render cost low via ref + tick).
+  const hoveredCountryRef = useRef<object | null>(null);
+
   return (
     <div ref={containerRef} className="absolute inset-0">
       <Globe
@@ -147,25 +149,51 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
         width={sizeRef.current.w || undefined}
         height={sizeRef.current.h || undefined}
         backgroundColor="rgba(0,0,0,0)"
+        // Realistic Earth: day-time texture + bump map for terrain relief.
+        globeImageUrl="//unpkg.com/three-globe/example/img/earth-blue-marble.jpg"
+        bumpImageUrl="//unpkg.com/three-globe/example/img/earth-topology.png"
         showAtmosphere
         atmosphereColor={colors.primary}
-        atmosphereAltitude={0.18}
-        globeMaterial={
-          new THREE.MeshPhongMaterial({
-            color: new THREE.Color(colors.surface),
-            emissive: new THREE.Color(colors.surface),
-            emissiveIntensity: 0.05,
-            transparent: true,
-            opacity: 0.85,
-            shininess: 4,
-          })
-        }
-        // Country polygons (wireframe-ish look)
+        atmosphereAltitude={0.22}
+        // Country polygons overlay — invisible by default, glow cyan on hover.
         polygonsData={countriesRef.current?.features ?? []}
-        polygonCapColor={() => `${colors.primary}10`}
-        polygonSideColor={() => `${colors.primary}05`}
-        polygonStrokeColor={() => colors.primaryGlow}
-        polygonAltitude={0.005}
+        polygonCapColor={(d: object) =>
+          d === hoveredCountryRef.current
+            ? `${colors.primary}55`
+            : "rgba(0,0,0,0)"
+        }
+        polygonSideColor={() => "rgba(0,0,0,0)"}
+        polygonStrokeColor={() => `${colors.primaryGlow}`}
+        polygonAltitude={(d: object) =>
+          d === hoveredCountryRef.current ? 0.01 : 0.005
+        }
+        polygonLabel={(d: object) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const name = (d as any)?.properties?.name ?? "";
+          const count = events.filter((e) =>
+            countryMatches(name, e.country)
+          ).length;
+          return `
+            <div style="
+              font-family:'JetBrains Mono',monospace;
+              background:hsl(220 50% 4% / 0.9);
+              border:1px solid ${colors.primary};
+              padding:6px 10px;border-radius:2px;
+              color:${colors.primary};
+              text-transform:uppercase;letter-spacing:0.15em;font-size:11px;
+              box-shadow:0 0 16px ${colors.primary}80;
+            ">
+              <div style="font-weight:600;">${name}</div>
+              <div style="color:hsl(200 15% 60%);font-size:10px;margin-top:2px;">
+                ${count} signal${count === 1 ? "" : "s"}
+              </div>
+            </div>
+          `;
+        }}
+        onPolygonHover={(d) => {
+          hoveredCountryRef.current = (d as object) ?? null;
+          force();
+        }}
         // Arcs
         arcsData={arcs}
         arcStartLat={(d: object) => (d as GlobalEvent).lat}
@@ -180,43 +208,43 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
         arcDashLength={0.5}
         arcDashGap={1}
         arcDashAnimateTime={3500}
-        // HTML markers (pulsing rings)
-        htmlElementsData={htmlElements}
-        htmlLat={(d: object) => (d as GlobalEvent).lat}
-        htmlLng={(d: object) => (d as GlobalEvent).lng}
-        htmlAltitude={0.01}
-        htmlElement={(d: object) => {
-          const ev = d as GlobalEvent;
-          const isSelected = ev.id === selectedId;
-          const wrap = document.createElement("div");
-          wrap.style.cssText = `pointer-events:auto;cursor:pointer;width:0;height:0;`;
-          const accent = isSelected ? colors.secondary : colors.primary;
-          wrap.innerHTML = `
-            <div style="position:relative;transform:translate(-50%,-50%);">
-              <div style="
-                position:absolute;left:0;top:0;transform:translate(-50%,-50%);
-                width:8px;height:8px;border-radius:9999px;
-                background:${accent};
-                box-shadow:0 0 8px ${accent},0 0 16px ${accent};
-              "></div>
-              <div style="
-                position:absolute;left:0;top:0;transform:translate(-50%,-50%);
-                width:24px;height:24px;border-radius:9999px;
-                border:1.5px solid ${accent};
-                animation:pulse-ring 2s ease-out infinite;
-                opacity:0.9;
-              "></div>
-            </div>
-          `;
-          wrap.addEventListener("click", (e) => {
-            e.stopPropagation();
-            onSelect(ev.id);
-          });
-          return wrap;
-        }}
+        // Pulsing event markers — using built-in points layer (3D, robust)
+        // plus a separate "ring" layer for the animated halo.
+        pointsData={htmlElements}
+        pointLat={(d: object) => (d as GlobalEvent).lat}
+        pointLng={(d: object) => (d as GlobalEvent).lng}
+        pointColor={(d: object) =>
+          (d as GlobalEvent).id === selectedId
+            ? colors.secondary
+            : colors.primary
+        }
+        pointAltitude={0.01}
+        pointRadius={(d: object) =>
+          (d as GlobalEvent).id === selectedId ? 0.45 : 0.3
+        }
+        pointResolution={8}
+        onPointClick={(d) => onSelect((d as GlobalEvent).id)}
+        ringsData={htmlElements}
+        ringLat={(d: object) => (d as GlobalEvent).lat}
+        ringLng={(d: object) => (d as GlobalEvent).lng}
+        ringColor={(d: object) => () =>
+          (d as GlobalEvent).id === selectedId
+            ? colors.secondary
+            : colors.primary}
+        ringMaxRadius={3}
+        ringPropagationSpeed={2}
+        ringRepeatPeriod={1500}
+        ringAltitude={0.011}
       />
     </div>
   );
+}
+
+function countryMatches(geoName: string, eventCountry: string) {
+  if (!geoName || !eventCountry) return false;
+  const a = geoName.toLowerCase();
+  const b = eventCountry.toLowerCase();
+  return a === b || a.includes(b) || b.includes(a);
 }
 
 /* ---------------- helpers ---------------- */
