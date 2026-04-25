@@ -75,6 +75,33 @@ function pickHub(lat: number, lng: number) {
   return best;
 }
 
+type Event = {
+  id: string;
+  title: string;
+  description: string | null;
+  url: string;
+  image: string | null;
+  source: string;
+  publishedAt: string;
+  country: string;
+  countryCode: string;
+  lat: number;
+  lng: number;
+  endLat: number;
+  endLng: number;
+};
+
+// In-memory cache shared across invocations of the same edge worker.
+// GNews free tier is ~1 req/sec and small daily quota, so we cache aggressively
+// and rotate which countries we refresh on each call.
+const cache: { events: Event[]; fetchedAt: string } = {
+  events: [],
+  fetchedAt: new Date(0).toISOString(),
+};
+let rotationIndex = 0;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -86,72 +113,70 @@ Deno.serve(async (req) => {
       throw new Error("GNEWS_API_KEY is not configured");
     }
 
-    // Fetch from a handful of countries in parallel for global coverage.
-    const sample = COUNTRY_CODES
-      .slice()
-      .sort(() => Math.random() - 0.5)
-      .slice(0, 8);
+    // Rotate through 4 countries per request, sequentially with 1.2s spacing
+    // to respect GNews free tier rate limits (1 req/sec).
+    const batchSize = 4;
+    const batch: string[] = [];
+    for (let i = 0; i < batchSize; i++) {
+      batch.push(COUNTRY_CODES[(rotationIndex + i) % COUNTRY_CODES.length]);
+    }
+    rotationIndex = (rotationIndex + batchSize) % COUNTRY_CODES.length;
 
-    const results = await Promise.allSettled(
-      sample.map(async (code) => {
-        const url = `https://gnews.io/api/v4/top-headlines?country=${code}&max=3&lang=en&apikey=${apiKey}`;
+    const newEvents: Event[] = [];
+    for (let i = 0; i < batch.length; i++) {
+      const code = batch[i];
+      if (i > 0) await sleep(1200);
+      try {
+        const url = `https://gnews.io/api/v4/top-headlines?country=${code}&max=4&lang=en&apikey=${apiKey}`;
         const r = await fetch(url);
         if (!r.ok) {
           const text = await r.text();
           console.error(`gnews ${code} ${r.status}: ${text}`);
-          throw new Error(`gnews ${code} ${r.status}`);
+          continue;
         }
         const j = await r.json();
-        return { code, articles: j.articles ?? [] };
-      })
-    );
-
-    const events: Array<{
-      id: string;
-      title: string;
-      description: string | null;
-      url: string;
-      image: string | null;
-      source: string;
-      publishedAt: string;
-      country: string;
-      countryCode: string;
-      lat: number;
-      lng: number;
-      endLat: number;
-      endLng: number;
-    }> = [];
-
-    for (const res of results) {
-      if (res.status !== "fulfilled") continue;
-      const { code, articles } = res.value;
-      const geo = COUNTRIES[code];
-      if (!geo) continue;
-      for (const a of articles) {
-        const hub = pickHub(geo.lat, geo.lng);
-        // Tiny jitter so multiple arcs from the same country don't fully overlap.
-        const jitterLat = (Math.random() - 0.5) * 4;
-        const jitterLng = (Math.random() - 0.5) * 4;
-        events.push({
-          id: `${code}-${a.url}`,
-          title: a.title,
-          description: a.description,
-          url: a.url,
-          image: a.image,
-          source: a.source?.name ?? "Unknown",
-          publishedAt: a.publishedAt,
-          country: geo.name,
-          countryCode: code.toUpperCase(),
-          lat: geo.lat + jitterLat,
-          lng: geo.lng + jitterLng,
-          endLat: hub.lat,
-          endLng: hub.lng,
-        });
+        const geo = COUNTRIES[code];
+        for (const a of j.articles ?? []) {
+          const hub = pickHub(geo.lat, geo.lng);
+          const jitterLat = (Math.random() - 0.5) * 4;
+          const jitterLng = (Math.random() - 0.5) * 4;
+          newEvents.push({
+            id: `${code}-${a.url}`,
+            title: a.title,
+            description: a.description,
+            url: a.url,
+            image: a.image,
+            source: a.source?.name ?? "Unknown",
+            publishedAt: a.publishedAt,
+            country: geo.name,
+            countryCode: code.toUpperCase(),
+            lat: geo.lat + jitterLat,
+            lng: geo.lng + jitterLng,
+            endLat: hub.lat,
+            endLng: hub.lng,
+          });
+        }
+      } catch (e) {
+        console.error(`gnews ${code} fetch failed`, e);
       }
     }
 
+    // Merge new events into cache, dedupe by id, cap at ~80 to keep payload small.
+    const merged = new Map<string, Event>();
+    for (const e of newEvents) merged.set(e.id, e);
+    for (const e of cache.events) if (!merged.has(e.id)) merged.set(e.id, e);
+    const events = Array.from(merged.values())
+      .sort(
+        (a, b) =>
+          new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+      )
+      .slice(0, 80);
+
+    cache.events = events;
+    cache.fetchedAt = new Date().toISOString();
+
     return new Response(
-      JSON.stringify({ events, fetchedAt: new Date().toISOString() }),
+      JSON.stringify({ events, fetchedAt: cache.fetchedAt }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
         status: 200,
