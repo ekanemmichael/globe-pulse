@@ -35,10 +35,8 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
       .then(async (topo) => {
         // Convert TopoJSON to GeoJSON via topojson-client (loaded dynamically)
         const ts = await import("topojson-client");
-        const gj = ts.feature(
-          topo,
-          (topo as { objects: { countries: object } }).objects.countries
-        ) as unknown as { features: object[] };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const gj = ts.feature(topo as any, (topo as any).objects.countries) as unknown as { features: object[] };
         if (cancelled) return;
         countriesRef.current = gj;
         force();
