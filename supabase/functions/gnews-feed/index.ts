@@ -171,9 +171,9 @@ Deno.serve(async (req) => {
       throw new Error("GNEWS_API_KEY is not configured");
     }
 
-    // Rotate through 4 countries per request, sequentially with 1.2s spacing
+    // Rotate through 6 countries per request, sequentially with 1.2s spacing
     // to respect GNews free tier rate limits (1 req/sec).
-    const batchSize = 4;
+    const batchSize = 6;
     const batch: string[] = [];
     for (let i = 0; i < batchSize; i++) {
       batch.push(COUNTRY_CODES[(rotationIndex + i) % COUNTRY_CODES.length]);
@@ -185,7 +185,7 @@ Deno.serve(async (req) => {
       const code = batch[i];
       if (i > 0) await sleep(1200);
       try {
-        const url = `https://gnews.io/api/v4/top-headlines?country=${code}&max=4&lang=en&apikey=${apiKey}`;
+        const url = `https://gnews.io/api/v4/top-headlines?country=${code}&max=8&lang=en&apikey=${apiKey}`;
         const r = await fetch(url);
         if (!r.ok) {
           const text = await r.text();
@@ -194,22 +194,36 @@ Deno.serve(async (req) => {
         }
         const j = await r.json();
         const geo = COUNTRIES[code];
-        for (const a of j.articles ?? []) {
-          const hub = pickHub(geo.lat, geo.lng);
-          const jitterLat = (Math.random() - 0.5) * 4;
-          const jitterLng = (Math.random() - 0.5) * 4;
+        // Build the candidate hotspot pool: parent country + linked extras.
+        const spots = [
+          { code, name: geo.name, lat: geo.lat, lng: geo.lng },
+          ...EXTRA_HOTSPOTS.filter((h) => h.parent === code).map((h) => ({
+            code: h.code,
+            name: h.name,
+            lat: h.lat,
+            lng: h.lng,
+          })),
+        ];
+        const articles = j.articles ?? [];
+        for (let ai = 0; ai < articles.length; ai++) {
+          const a = articles[ai];
+          // Distribute articles round-robin across the country + its hotspots
+          const spot = spots[ai % spots.length];
+          const hub = pickHub(spot.lat, spot.lng);
+          const jitterLat = (Math.random() - 0.5) * 3;
+          const jitterLng = (Math.random() - 0.5) * 3;
           newEvents.push({
-            id: `${code}-${a.url}`,
+            id: `${spot.code}-${a.url}`,
             title: a.title,
             description: a.description,
             url: a.url,
             image: a.image,
             source: a.source?.name ?? "Unknown",
             publishedAt: a.publishedAt,
-            country: geo.name,
-            countryCode: code.toUpperCase(),
-            lat: geo.lat + jitterLat,
-            lng: geo.lng + jitterLng,
+            country: spot.name,
+            countryCode: spot.code.toUpperCase(),
+            lat: spot.lat + jitterLat,
+            lng: spot.lng + jitterLng,
             endLat: hub.lat,
             endLng: hub.lng,
           });
@@ -219,7 +233,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Merge new events into cache, dedupe by id, cap at ~80 to keep payload small.
+    // Merge new events into cache, dedupe by id, cap at ~200 for a denser globe.
     const merged = new Map<string, Event>();
     for (const e of newEvents) merged.set(e.id, e);
     for (const e of cache.events) if (!merged.has(e.id)) merged.set(e.id, e);
@@ -228,7 +242,7 @@ Deno.serve(async (req) => {
         (a, b) =>
           new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
       )
-      .slice(0, 80);
+      .slice(0, 200);
 
     cache.events = events;
     cache.fetchedAt = new Date().toISOString();
