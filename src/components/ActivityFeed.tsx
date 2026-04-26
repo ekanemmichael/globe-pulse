@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GlobalEvent } from "@/types/event";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +18,12 @@ export function ActivityFeed({
   fetchedAt,
 }: ActivityFeedProps) {
   const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  // Tick every 30s so relative timestamps stay accurate without refetching.
+  const [, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // When the user clicks a globe marker, scroll the feed item into view.
   useEffect(() => {
