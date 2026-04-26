@@ -227,10 +227,11 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
         ringsData={htmlElements}
         ringLat={(d: object) => (d as GlobalEvent).lat}
         ringLng={(d: object) => (d as GlobalEvent).lng}
-        ringColor={(d: object) => () =>
+        ringColor={(d: object) =>
           (d as GlobalEvent).id === selectedId
             ? colors.secondary
-            : colors.primary}
+            : colors.primary
+        }
         ringMaxRadius={3}
         ringPropagationSpeed={2}
         ringRepeatPeriod={1500}

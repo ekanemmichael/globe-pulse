@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GlobalEvent } from "@/types/event";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +18,12 @@ export function ActivityFeed({
   fetchedAt,
 }: ActivityFeedProps) {
   const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  // Tick every 30s so relative timestamps stay accurate without refetching.
+  const [, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // When the user clicks a globe marker, scroll the feed item into view.
   useEffect(() => {
@@ -59,11 +65,16 @@ export function ActivityFeed({
             No signals detected
           </div>
         ) : (
-          <ul className="divide-y divide-border/20">
+          <ul className="relative">
+            {/* Continuous timeline spine */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute bottom-0 left-[1.4rem] top-0 w-px bg-gradient-to-b from-primary/40 via-border/30 to-transparent"
+            />
             {events.map((ev) => {
               const isSelected = ev.id === selectedId;
               return (
-                <li key={ev.id}>
+                <li key={ev.id} className="border-b border-border/20 last:border-0">
                   <button
                     ref={(el) => {
                       itemRefs.current[ev.id] = el;
@@ -76,14 +87,13 @@ export function ActivityFeed({
                     )}
                   >
                     <div className="flex items-start gap-3">
-                      <div className="flex flex-col items-center pt-1">
+                      <div className="relative z-10 flex flex-col items-center pt-1.5">
                         <span
                           className={cn(
-                            "h-1.5 w-1.5 rounded-full bg-primary shadow-glow",
-                            isSelected && "animate-blink"
+                            "h-2 w-2 rounded-full border border-primary/60 bg-background shadow-glow transition-all",
+                            isSelected && "scale-125 bg-secondary border-secondary animate-blink"
                           )}
                         />
-                        <span className="mt-1 h-full w-px bg-border/30" />
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="mb-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -91,12 +101,18 @@ export function ActivityFeed({
                             {ev.countryCode}
                           </span>
                           <span className="truncate">{ev.source}</span>
-                          <span className="ml-auto shrink-0">
+                          <span
+                            className="ml-auto shrink-0 tabular-nums text-primary/80"
+                            title={new Date(ev.publishedAt).toLocaleString()}
+                          >
                             {timeAgo(ev.publishedAt)}
                           </span>
                         </div>
                         <p className="line-clamp-2 text-sm leading-snug text-foreground group-hover:text-primary">
                           {ev.title}
+                        </p>
+                        <p className="mt-1 font-mono text-[10px] text-muted-foreground/70 tabular-nums">
+                          {formatStamp(ev.publishedAt)}
                         </p>
                         {isSelected && ev.description && (
                           <p className="mt-2 line-clamp-3 text-xs text-muted-foreground">
@@ -143,8 +159,31 @@ function FeedSkeleton() {
 
 function timeAgo(iso: string) {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (diff < 60) return `${Math.floor(diff)}s`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  return `${Math.floor(diff / 86400)}d`;
+  if (diff < 5) return "just now";
+  if (diff < 60) return `${Math.floor(diff)}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function formatStamp(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const date = d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "2-digit",
+  });
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return `${date} · ${time} UTC${formatTzOffset(d)}`;
+}
+
+function formatTzOffset(d: Date) {
+  const offset = -d.getTimezoneOffset() / 60;
+  if (offset === 0) return "";
+  const sign = offset > 0 ? "+" : "";
+  return `${sign}${offset}`;
 }
