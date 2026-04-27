@@ -6,6 +6,8 @@ interface PulseGlobeProps {
   events: GlobalEvent[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  /** Animation tempo — "calm" slows arcs/rings, "live" speeds them up. */
+  speed?: "calm" | "live";
 }
 
 /**
@@ -14,11 +16,37 @@ interface PulseGlobeProps {
  * - Animated arcs from event origin to a hub
  * - Pulsing rings at each event endpoint
  */
-export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
+export function PulseGlobe({
+  events,
+  selectedId,
+  onSelect,
+  speed = "live",
+}: PulseGlobeProps) {
   const globeRef = useRef<GlobeMethods | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
   const sizeRef = useRef({ w: 0, h: 0 });
   const [, force] = useReducerTick();
+
+  // Speed multipliers — "calm" is slower & gentler, "live" is the punchy default.
+  const tempo = useMemo(
+    () =>
+      speed === "calm"
+        ? {
+            arcDashTime: 7000,
+            ringPropagation: 1.2,
+            ringPeriod: 2400,
+            blinkHz: 900,
+            blinkAmp: 0.18,
+          }
+        : {
+            arcDashTime: 3600,
+            ringPropagation: 2.6,
+            ringPeriod: 1300,
+            blinkHz: 480,
+            blinkAmp: 0.3,
+          },
+    [speed]
+  );
 
   // Read CSS tokens once for theming the globe (computed at runtime).
   const colors = useMemo(() => readDesignTokens(), []);
@@ -135,20 +163,25 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
   );
 
   const arcs = useMemo(
-    () =>
-      events.map((e) => ({
-        ...e,
-        color:
-          e.id === selectedId
-            ? [colors.secondary, colors.secondaryGlow ?? colors.secondary]
-            : [
-                `${colors.primary}`,
-                `${colors.primaryGlow}`,
-                `${colors.secondary}`,
-              ],
-      })),
+    () => buildArcs(events, selectedId, colors),
     [events, selectedId, colors]
   );
+
+  // Direction markers: drop a small "→" label at ~70% along each arc so the
+  // viewer can tell which way the signal is flowing toward the hub.
+  const arrowLabels = useMemo(
+    () => buildArrowLabels(events, colors, selectedId),
+    [events, colors, selectedId]
+  );
+
+  // Hub glow: subtle synchronized pulse at every endpoint (the receiving hub).
+  // Uses a second ring layer with a slightly different cadence so it visually
+  // "answers" the incoming arc without competing with the source blink.
+  const hubs = useMemo(() => collectHubs(events), [events]);
+  const hubPulse = useMemo(() => {
+    const t = (Date.now() / tempo.blinkHz) % (Math.PI * 2);
+    return 0.6 + tempo.blinkAmp * (0.5 + 0.5 * Math.sin(t));
+  }, [tempo, /* re-eval on tick */ Math.floor(Date.now() / 120)]);
 
   // Hovered country highlight state (keeps re-render cost low via ref + tick).
   const hoveredCountryRef = useRef<object | null>(null);
@@ -207,25 +240,35 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
         }}
         // Arcs
         arcsData={arcs}
-        arcStartLat={(d: object) => (d as GlobalEvent).lat}
-        arcStartLng={(d: object) => (d as GlobalEvent).lng}
-        arcEndLat={(d: object) => (d as GlobalEvent).endLat}
-        arcEndLng={(d: object) => (d as GlobalEvent).endLng}
+        arcStartLat={(d: object) => (d as ArcDatum).startLat}
+        arcStartLng={(d: object) => (d as ArcDatum).startLng}
+        arcEndLat={(d: object) => (d as ArcDatum).endLat}
+        arcEndLng={(d: object) => (d as ArcDatum).endLng}
         arcColor={(d: object) =>
           (d as { color: string[] }).color
         }
         arcStroke={(d: object) =>
-          (d as GlobalEvent).id === selectedId ? 0.9 : 0.55
+          (d as ArcDatum).id === selectedId ? 0.9 : 0.5
         }
-        arcAltitudeAutoScale={0.6}
+        arcAltitude={(d: object) => (d as ArcDatum).altitude}
         arcDashLength={0.35}
         arcDashGap={1.6}
         arcDashInitialGap={(d: object) =>
-          // stagger so arcs don't all "fire" at once — gives a flowing feel
-          ((d as GlobalEvent).lng + 180) / 360
+          (d as ArcDatum).dashOffset
         }
-        arcDashAnimateTime={4200}
+        arcDashAnimateTime={tempo.arcDashTime}
         arcsTransitionDuration={0}
+        // Direction arrows along arcs.
+        labelsData={arrowLabels}
+        labelLat={(d: object) => (d as ArrowLabel).lat}
+        labelLng={(d: object) => (d as ArrowLabel).lng}
+        labelText={(d: object) => (d as ArrowLabel).text}
+        labelSize={(d: object) => (d as ArrowLabel).size}
+        labelDotRadius={0}
+        labelColor={(d: object) => (d as ArrowLabel).color}
+        labelResolution={2}
+        labelAltitude={0.02}
+        labelIncludeDot={false}
         // Pulsing event markers — using built-in points layer (3D, robust)
         // plus a separate "ring" layer for the animated halo.
         pointsData={htmlElements}
@@ -239,36 +282,57 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
         pointAltitude={0.012}
         pointRadius={(d: object) => {
           const isSel = (d as GlobalEvent).id === selectedId;
-          // Subtle blink driven by time — modulate radius with a sine wave.
-          const t = (Date.now() / 600) % (Math.PI * 2);
-          const blink = 0.85 + 0.25 * Math.sin(t + ((d as GlobalEvent).lat || 0));
+          // Subtle blink driven by time — modulate radius with a sine wave,
+          // tempo-aware so "calm" mode breathes more slowly.
+          const t = (Date.now() / tempo.blinkHz) % (Math.PI * 2);
+          const blink =
+            1 - tempo.blinkAmp +
+            tempo.blinkAmp * Math.sin(t + ((d as GlobalEvent).lat || 0));
           return (isSel ? 0.5 : 0.3) * blink;
         }}
         pointsTransitionDuration={0}
         pointResolution={10}
         onPointClick={(d) => onSelect((d as GlobalEvent).id)}
-        ringsData={htmlElements}
-        ringLat={(d: object) => (d as GlobalEvent).lat}
-        ringLng={(d: object) => (d as GlobalEvent).lng}
+        // Source pulse rings + hub pulse rings, merged into one layer so
+        // react-globe.gl renders both with consistent timing. Hubs use a
+        // slightly larger radius so the "receive" halo synchronises visually
+        // with the incoming arc.
+        ringsData={[
+          ...htmlElements.map((e) => ({
+            id: e.id,
+            lat: e.lat,
+            lng: e.lng,
+            kind: "source" as const,
+            isSelected: e.id === selectedId,
+          })),
+          ...hubs.map((h) => ({
+            id: `hub-${h.lat}-${h.lng}`,
+            lat: h.lat,
+            lng: h.lng,
+            kind: "hub" as const,
+            isSelected: false,
+          })),
+        ]}
+        ringLat={(d: object) => (d as RingDatum).lat}
+        ringLng={(d: object) => (d as RingDatum).lng}
         ringColor={(d: object) => {
-          const base =
-            (d as GlobalEvent).id === selectedId
-              ? colors.secondary
-              : colors.primary;
-          // react-globe.gl expects a function (t) => rgba string for ring fade
-          return (t: number) => {
-            // t is 0..1 — fade out as the ring expands
-            const alpha = Math.max(0, 1 - t);
-            return colorWithAlpha(base, alpha);
-          };
+          const r = d as RingDatum;
+          if (r.kind === "hub") return colorWithAlpha(colors.primaryGlow, hubPulse);
+          return r.isSelected
+            ? colorWithAlpha(colors.secondary, 0.85)
+            : colorWithAlpha(colors.primary, 0.85);
         }}
-        ringMaxRadius={(d: object) =>
-          (d as GlobalEvent).id === selectedId ? 5 : 3.5
-        }
-        ringPropagationSpeed={2.4}
-        ringRepeatPeriod={(d: object) =>
-          (d as GlobalEvent).id === selectedId ? 900 : 1400
-        }
+        ringMaxRadius={(d: object) => {
+          const r = d as RingDatum;
+          if (r.kind === "hub") return 6;
+          return r.isSelected ? 5 : 3.5;
+        }}
+        ringPropagationSpeed={tempo.ringPropagation}
+        ringRepeatPeriod={(d: object) => {
+          const r = d as RingDatum;
+          if (r.kind === "hub") return tempo.ringPeriod * 0.85;
+          return r.isSelected ? tempo.ringPeriod * 0.65 : tempo.ringPeriod;
+        }}
         ringAltitude={0.012}
       />
     </div>
@@ -280,6 +344,119 @@ function countryMatches(geoName: string, eventCountry: string) {
   const a = geoName.toLowerCase();
   const b = eventCountry.toLowerCase();
   return a === b || a.includes(b) || b.includes(a);
+}
+
+/* ---------------- arc / hub shaping ---------------- */
+
+interface ArcDatum {
+  id: string;
+  startLat: number;
+  startLng: number;
+  endLat: number;
+  endLng: number;
+  altitude: number;
+  dashOffset: number;
+  color: string[];
+}
+
+interface ArrowLabel {
+  lat: number;
+  lng: number;
+  text: string;
+  size: number;
+  color: string;
+}
+
+interface RingDatum {
+  id: string;
+  lat: number;
+  lng: number;
+  kind: "source" | "hub";
+  isSelected: boolean;
+}
+
+/**
+ * Build arc geometry with a small "collision-avoidance" altitude bump.
+ * Arcs that share a similar route get progressively higher arcs so they
+ * fan out vertically instead of stacking on top of each other.
+ */
+function buildArcs(
+  events: GlobalEvent[],
+  selectedId: string | null,
+  colors: ReturnType<typeof readDesignTokens>
+): ArcDatum[] {
+  // Bucket arcs by a coarse great-circle key (rounded endpoints).
+  const buckets = new Map<string, number>();
+  return events.map((e) => {
+    const key = routeKey(e.lat, e.lng, e.endLat, e.endLng);
+    const idx = buckets.get(key) ?? 0;
+    buckets.set(key, idx + 1);
+    // Each parallel arc gets a slightly higher altitude — readable separation.
+    const altitude = 0.18 + idx * 0.06 + Math.min(0.25, distance(e) * 0.0007);
+    return {
+      id: e.id,
+      startLat: e.lat,
+      startLng: e.lng,
+      endLat: e.endLat,
+      endLng: e.endLng,
+      altitude,
+      dashOffset: ((e.lng + 180) / 360 + idx * 0.13) % 1,
+      color:
+        e.id === selectedId
+          ? [colors.secondary, colors.secondaryGlow ?? colors.secondary]
+          : [colors.primary, colors.primaryGlow, colors.secondary],
+    };
+  });
+}
+
+function routeKey(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const r = (n: number) => Math.round(n / 4) * 4; // 4° buckets
+  // Order-independent so A→B and B→A bucket together.
+  const a = `${r(lat1)},${r(lng1)}`;
+  const b = `${r(lat2)},${r(lng2)}`;
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+function distance(e: GlobalEvent) {
+  const dLat = e.endLat - e.lat;
+  const dLng = e.endLng - e.lng;
+  return Math.sqrt(dLat * dLat + dLng * dLng);
+}
+
+/**
+ * Place a "→" marker near the receiving hub end of every arc, rotated
+ * implicitly by the great-circle direction (we just pick a point ~75% along
+ * the route — globe labels always face the camera, so a literal arrow glyph
+ * still reads as "flow toward hub").
+ */
+function buildArrowLabels(
+  events: GlobalEvent[],
+  colors: ReturnType<typeof readDesignTokens>,
+  selectedId: string | null
+): ArrowLabel[] {
+  return events.map((e) => {
+    const t = 0.78; // closer to the hub
+    return {
+      lat: e.lat + (e.endLat - e.lat) * t,
+      lng: e.lng + (e.endLng - e.lng) * t,
+      text: "›",
+      size: e.id === selectedId ? 0.55 : 0.4,
+      color:
+        e.id === selectedId
+          ? colors.secondary
+          : colors.primaryGlow,
+    };
+  });
+}
+
+/** Unique hub endpoints so we can glow each receiving location once. */
+function collectHubs(events: GlobalEvent[]) {
+  const seen = new Map<string, { lat: number; lng: number }>();
+  for (const e of events) {
+    const k = `${e.endLat.toFixed(2)},${e.endLng.toFixed(2)}`;
+    if (!seen.has(k)) seen.set(k, { lat: e.endLat, lng: e.endLng });
+  }
+  return [...seen.values()];
 }
 
 /* ---------------- helpers ---------------- */
