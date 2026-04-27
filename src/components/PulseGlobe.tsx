@@ -106,6 +106,13 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
     return () => ro.disconnect();
   }, [force]);
 
+  // Drive the point-blink animation by ticking the component a few times
+  // a second. Cheap because react-globe.gl diffs its scene internally.
+  useEffect(() => {
+    const id = window.setInterval(() => force(), 120);
+    return () => window.clearInterval(id);
+  }, [force]);
+
   // Fly to the selected event.
   useEffect(() => {
     if (!selectedId) return;
