@@ -133,8 +133,12 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
         ...e,
         color:
           e.id === selectedId
-            ? [colors.secondary, colors.secondary]
-            : [colors.primary, colors.primaryGlow],
+            ? [colors.secondary, colors.secondaryGlow ?? colors.secondary]
+            : [
+                `${colors.primary}`,
+                `${colors.primaryGlow}`,
+                `${colors.secondary}`,
+              ],
       })),
     [events, selectedId, colors]
   );
@@ -203,11 +207,18 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
         arcColor={(d: object) =>
           (d as { color: string[] }).color
         }
-        arcStroke={0.4}
-        arcAltitudeAutoScale={0.5}
-        arcDashLength={0.5}
-        arcDashGap={1}
-        arcDashAnimateTime={3500}
+        arcStroke={(d: object) =>
+          (d as GlobalEvent).id === selectedId ? 0.9 : 0.55
+        }
+        arcAltitudeAutoScale={0.6}
+        arcDashLength={0.35}
+        arcDashGap={1.6}
+        arcDashInitialGap={(d: object) =>
+          // stagger so arcs don't all "fire" at once — gives a flowing feel
+          ((d as GlobalEvent).lng + 180) / 360
+        }
+        arcDashAnimateTime={4200}
+        arcsTransitionDuration={0}
         // Pulsing event markers — using built-in points layer (3D, robust)
         // plus a separate "ring" layer for the animated halo.
         pointsData={htmlElements}
@@ -218,24 +229,40 @@ export function PulseGlobe({ events, selectedId, onSelect }: PulseGlobeProps) {
             ? colors.secondary
             : colors.primary
         }
-        pointAltitude={0.01}
-        pointRadius={(d: object) =>
-          (d as GlobalEvent).id === selectedId ? 0.45 : 0.3
-        }
-        pointResolution={8}
+        pointAltitude={0.012}
+        pointRadius={(d: object) => {
+          const isSel = (d as GlobalEvent).id === selectedId;
+          // Subtle blink driven by time — modulate radius with a sine wave.
+          const t = (Date.now() / 600) % (Math.PI * 2);
+          const blink = 0.85 + 0.25 * Math.sin(t + ((d as GlobalEvent).lat || 0));
+          return (isSel ? 0.5 : 0.3) * blink;
+        }}
+        pointsTransitionDuration={0}
+        pointResolution={10}
         onPointClick={(d) => onSelect((d as GlobalEvent).id)}
         ringsData={htmlElements}
         ringLat={(d: object) => (d as GlobalEvent).lat}
         ringLng={(d: object) => (d as GlobalEvent).lng}
-        ringColor={(d: object) =>
-          (d as GlobalEvent).id === selectedId
-            ? colors.secondary
-            : colors.primary
+        ringColor={(d: object) => {
+          const base =
+            (d as GlobalEvent).id === selectedId
+              ? colors.secondary
+              : colors.primary;
+          // react-globe.gl expects a function (t) => rgba string for ring fade
+          return (t: number) => {
+            // t is 0..1 — fade out as the ring expands
+            const alpha = Math.max(0, 1 - t);
+            return colorWithAlpha(base, alpha);
+          };
+        }}
+        ringMaxRadius={(d: object) =>
+          (d as GlobalEvent).id === selectedId ? 5 : 3.5
         }
-        ringMaxRadius={3}
-        ringPropagationSpeed={2}
-        ringRepeatPeriod={1500}
-        ringAltitude={0.011}
+        ringPropagationSpeed={2.4}
+        ringRepeatPeriod={(d: object) =>
+          (d as GlobalEvent).id === selectedId ? 900 : 1400
+        }
+        ringAltitude={0.012}
       />
     </div>
   );
@@ -256,6 +283,7 @@ function readDesignTokens() {
       primary: "#2af0ff",
       primaryGlow: "#7ff8ff",
       secondary: "#ff3fb1",
+      secondaryGlow: "#ff8fd1",
       surface: "#08121f",
     };
   }
@@ -265,8 +293,39 @@ function readDesignTokens() {
     primary: hsl("--primary"),
     primaryGlow: hsl("--primary-glow"),
     secondary: hsl("--secondary"),
+    secondaryGlow: hsl("--secondary"),
     surface: hsl("--surface"),
   };
+}
+
+/**
+ * Convert an `hsl(H S% L%)` or `#rrggbb` color into an `hsla()` / `rgba()`
+ * string with the supplied alpha. Used so animated rings can fade out
+ * smoothly without producing colors that confuse the three.js tween engine.
+ */
+function colorWithAlpha(color: string, alpha: number): string {
+  const a = Math.max(0, Math.min(1, alpha));
+  const trimmed = color.trim();
+  if (trimmed.startsWith("hsl")) {
+    const inner = trimmed.replace(/^hsla?\(/, "").replace(/\)$/, "");
+    const parts = inner.split(/[,\s/]+/).filter(Boolean).slice(0, 3);
+    return `hsla(${parts.join(", ")}, ${a})`;
+  }
+  if (trimmed.startsWith("#")) {
+    const hex = trimmed.slice(1);
+    const full =
+      hex.length === 3
+        ? hex
+            .split("")
+            .map((c) => c + c)
+            .join("")
+        : hex;
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+  return trimmed;
 }
 
 import { useReducer } from "react";
