@@ -182,7 +182,6 @@ export function PulseGlobe({
     const t = (Date.now() / tempo.blinkHz) % (Math.PI * 2);
     return 0.6 + tempo.blinkAmp * (0.5 + 0.5 * Math.sin(t));
   }, [tempo, /* re-eval on tick */ Math.floor(Date.now() / 120)]);
-  );
 
   // Hovered country highlight state (keeps re-render cost low via ref + tick).
   const hoveredCountryRef = useRef<object | null>(null);
