@@ -264,7 +264,7 @@ export function PulseGlobe({
         labelLng={(d: object) => (d as ArrowLabel).lng}
         labelText={(d: object) => (d as ArrowLabel).text}
         labelSize={(d: object) => (d as ArrowLabel).size}
-        labelDotRadius={0}
+        labelDotRadius={0.01}
         labelColor={(d: object) => (d as ArrowLabel).color}
         labelResolution={2}
         labelAltitude={0.02}

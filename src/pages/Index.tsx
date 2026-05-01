@@ -29,23 +29,27 @@ const Index = () => {
       {/* HUD overlay */}
       <HudOverlay signalCount={events.length} countryCount={countryCount} />
 
-      {/* Animation tempo toggle */}
-      <div className="absolute left-6 bottom-6 z-30 flex items-center gap-1 rounded-sm border border-primary/40 bg-background/70 p-1 font-mono text-[10px] uppercase tracking-[0.2em] backdrop-blur">
-        <span className="px-2 text-muted-foreground">Tempo</span>
-        {(["calm", "live"] as const).map((s) => (
-          <button
-            key={s}
-            onClick={() => setSpeed(s)}
-            className={
-              "px-3 py-1 transition-colors " +
-              (speed === s
-                ? "bg-primary/20 text-primary shadow-[0_0_12px_hsl(var(--primary)/0.5)]"
-                : "text-muted-foreground hover:text-foreground")
-            }
-          >
-            {s}
-          </button>
-        ))}
+      {/* Animation tempo toggle — minimal pill, sits above footer rule */}
+      <div className="absolute bottom-16 left-6 z-30 flex items-baseline gap-3 font-mono text-[10px] uppercase tracking-[0.3em]">
+        <span className="text-muted-foreground">Tempo</span>
+        <div className="flex items-center gap-1">
+          {(["calm", "live"] as const).map((s, i) => (
+            <span key={s} className="flex items-center gap-1">
+              {i > 0 && <span className="text-muted-foreground/40">·</span>}
+              <button
+                onClick={() => setSpeed(s)}
+                className={
+                  "transition-colors " +
+                  (speed === s
+                    ? "text-primary text-glow"
+                    : "text-muted-foreground hover:text-foreground")
+                }
+              >
+                {s}
+              </button>
+            </span>
+          ))}
+        </div>
       </div>
 
       {/* Side feed */}
